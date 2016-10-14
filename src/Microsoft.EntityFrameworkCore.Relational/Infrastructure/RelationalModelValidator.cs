@@ -5,35 +5,42 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using JetBrains.Annotations;
+using Microsoft.EntityFrameworkCore.Internal;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Metadata.Internal;
 using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.EntityFrameworkCore.Storage.Internal;
 using Microsoft.Extensions.Logging;
 
-namespace Microsoft.EntityFrameworkCore.Internal
+namespace Microsoft.EntityFrameworkCore.Infrastructure
 {
     /// <summary>
-    ///     This API supports the Entity Framework Core infrastructure and is not intended to be used
-    ///     directly from your code. This API may change or be removed in future releases.
+    ///     The validator that enforces rules common for all relational providers.
     /// </summary>
-    public class RelationalModelValidator : LoggingModelValidator
+    public class RelationalModelValidator : ModelValidator
     {
         /// <summary>
-        ///     This API supports the Entity Framework Core infrastructure and is not intended to be used
-        ///     directly from your code. This API may change or be removed in future releases.
+        ///     Gets the relational annotation provider.
         /// </summary>
+        /// <value>
+        ///     The relational annotation provider.
+        /// </value>
         protected virtual IRelationalAnnotationProvider RelationalExtensions { get; }
 
         /// <summary>
-        ///     This API supports the Entity Framework Core infrastructure and is not intended to be used
-        ///     directly from your code. This API may change or be removed in future releases.
+        ///     Gets the type mapper.
         /// </summary>
+        /// <value>
+        ///     The type mapper.
+        /// </value>
         protected virtual IRelationalTypeMapper TypeMapper { get; }
 
         /// <summary>
-        ///     This API supports the Entity Framework Core infrastructure and is not intended to be used
-        ///     directly from your code. This API may change or be removed in future releases.
+        ///     Creates a new instance of <see cref="RelationalModelValidator" />.
         /// </summary>
+        /// <param name="loggerFactory"> The logger factory. </param>
+        /// <param name="relationalExtensions"></param>
+        /// <param name="typeMapper"> The type mapper. </param>
         public RelationalModelValidator(
             [NotNull] ILogger<RelationalModelValidator> loggerFactory,
             [NotNull] IRelationalAnnotationProvider relationalExtensions,
@@ -45,13 +52,11 @@ namespace Microsoft.EntityFrameworkCore.Internal
         }
 
         /// <summary>
-        ///     This API supports the Entity Framework Core infrastructure and is not intended to be used
-        ///     directly from your code. This API may change or be removed in future releases.
+        ///     Validates a model, throwing an exception if any errors are found.
         /// </summary>
+        /// <param name="model"> The model to validate. </param>
         public override void Validate(IModel model)
         {
-            base.Validate(model);
-
             EnsureDistinctTableNames(model);
             EnsureSharedColumnsCompatibility(model);
             EnsureSharedForeignKeysCompatibility(model);
@@ -87,11 +92,12 @@ namespace Microsoft.EntityFrameworkCore.Internal
         protected virtual void EnsureNoDefaultValuesOnKeys([NotNull] IModel model)
         {
             foreach (var property in model.GetEntityTypes().SelectMany(
-                    t => t.GetDeclaredKeys().SelectMany(
-                        k => k.Properties))
+                t => t.GetDeclaredKeys().SelectMany(
+                    k => k.Properties))
                 .Where(p => RelationalExtensions.For(p).DefaultValue != null))
             {
-                ShowWarning(RelationalStrings.KeyHasDefaultValue(property.Name, property.DeclaringEntityType.DisplayName()));
+                ShowWarning(RelationalEventId.ModelValidationKeyDefaultValueWarning,
+                    RelationalStrings.KeyHasDefaultValue(property.Name, property.DeclaringEntityType.DisplayName()));
             }
         }
 
@@ -110,7 +116,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
 
                 if (!tables.Add(name))
                 {
-                    ShowError(RelationalStrings.DuplicateTableName(annotations.TableName, annotations.Schema, entityType.DisplayName()));
+                    ThrowValidationError(RelationalStrings.DuplicateTableName(annotations.TableName, annotations.Schema, entityType.DisplayName()));
                 }
             }
         }
@@ -142,7 +148,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
                                                  ?? TypeMapper.GetMapping(duplicateProperty).StoreType;
                         if (!currentTypeString.Equals(previousTypeString, StringComparison.OrdinalIgnoreCase))
                         {
-                            ShowError(RelationalStrings.DuplicateColumnNameDataTypeMismatch(
+                            ThrowValidationError(RelationalStrings.DuplicateColumnNameDataTypeMismatch(
                                 duplicateProperty.DeclaringEntityType.DisplayName(),
                                 duplicateProperty.Name,
                                 property.DeclaringEntityType.DisplayName(),
@@ -155,7 +161,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
 
                         if (property.IsColumnNullable() != duplicateProperty.IsColumnNullable())
                         {
-                            ShowError(RelationalStrings.DuplicateColumnNameNullabilityMismatch(
+                            ThrowValidationError(RelationalStrings.DuplicateColumnNameNullabilityMismatch(
                                 duplicateProperty.DeclaringEntityType.DisplayName(),
                                 duplicateProperty.Name,
                                 property.DeclaringEntityType.DisplayName(),
@@ -168,7 +174,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
                         var previousComputedColumnSql = previousAnnotations.ComputedColumnSql ?? "";
                         if (!currentComputedColumnSql.Equals(previousComputedColumnSql, StringComparison.OrdinalIgnoreCase))
                         {
-                            ShowError(RelationalStrings.DuplicateColumnNameComputedSqlMismatch(
+                            ThrowValidationError(RelationalStrings.DuplicateColumnNameComputedSqlMismatch(
                                 duplicateProperty.DeclaringEntityType.DisplayName(),
                                 duplicateProperty.Name,
                                 property.DeclaringEntityType.DisplayName(),
@@ -183,7 +189,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
                         var previousDefaultValue = previousAnnotations.DefaultValue;
                         if (!Equals(currentDefaultValue, previousDefaultValue))
                         {
-                            ShowError(RelationalStrings.DuplicateColumnNameDefaultSqlMismatch(
+                            ThrowValidationError(RelationalStrings.DuplicateColumnNameDefaultSqlMismatch(
                                 duplicateProperty.DeclaringEntityType.DisplayName(),
                                 duplicateProperty.Name,
                                 property.DeclaringEntityType.DisplayName(),
@@ -198,7 +204,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
                         var previousDefaultValueSql = previousAnnotations.DefaultValueSql ?? "";
                         if (!currentDefaultValueSql.Equals(previousDefaultValueSql, StringComparison.OrdinalIgnoreCase))
                         {
-                            ShowError(RelationalStrings.DuplicateColumnNameDefaultSqlMismatch(
+                            ThrowValidationError(RelationalStrings.DuplicateColumnNameDefaultSqlMismatch(
                                 duplicateProperty.DeclaringEntityType.DisplayName(),
                                 duplicateProperty.Name,
                                 property.DeclaringEntityType.DisplayName(),
@@ -248,7 +254,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
                     var duplicatePrincipalTable = Format(duplicateAnnotations.Schema, duplicateAnnotations.TableName);
                     if (!string.Equals(principalTable, duplicatePrincipalTable, StringComparison.OrdinalIgnoreCase))
                     {
-                        ShowError(RelationalStrings.DuplicateForeignKeyPrincipalTableMismatch(
+                        ThrowValidationError(RelationalStrings.DuplicateForeignKeyPrincipalTableMismatch(
                             Property.Format(foreignKey.Properties),
                             foreignKey.DeclaringEntityType.DisplayName(),
                             Property.Format(duplicateForeignKey.Properties),
@@ -263,7 +269,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
                     var duplicateForeignKeyColumns = duplicateForeignKey.Properties.Select(p => RelationalExtensions.For(p).ColumnName).ToList();
                     if (!foreignKeyColumns.SequenceEqual(duplicateForeignKeyColumns, StringComparer.OrdinalIgnoreCase))
                     {
-                        ShowError(RelationalStrings.DuplicateForeignKeyColumnMismatch(
+                        ThrowValidationError(RelationalStrings.DuplicateForeignKeyColumnMismatch(
                             Property.Format(foreignKey.Properties),
                             foreignKey.DeclaringEntityType.DisplayName(),
                             Property.Format(duplicateForeignKey.Properties),
@@ -280,7 +286,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
                         p => RelationalExtensions.For(p).ColumnName).ToList();
                     if (!foreignKeyPrincipalColumns.SequenceEqual(duplicateForeignKeyPrincipalColumns, StringComparer.OrdinalIgnoreCase))
                     {
-                        ShowError(RelationalStrings.DuplicateForeignKeyPrincipalColumnMismatch(
+                        ThrowValidationError(RelationalStrings.DuplicateForeignKeyPrincipalColumnMismatch(
                             Property.Format(foreignKey.Properties),
                             foreignKey.DeclaringEntityType.DisplayName(),
                             Property.Format(duplicateForeignKey.Properties),
@@ -293,7 +299,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
 
                     if (foreignKey.IsUnique != duplicateForeignKey.IsUnique)
                     {
-                        ShowError(RelationalStrings.DuplicateForeignKeyUniquenessMismatch(
+                        ThrowValidationError(RelationalStrings.DuplicateForeignKeyUniquenessMismatch(
                             Property.Format(foreignKey.Properties),
                             foreignKey.DeclaringEntityType.DisplayName(),
                             Property.Format(duplicateForeignKey.Properties),
@@ -304,7 +310,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
 
                     if (foreignKey.IsRequired != duplicateForeignKey.IsRequired)
                     {
-                        ShowError(RelationalStrings.DuplicateForeignKeyUniquenessMismatch(
+                        ThrowValidationError(RelationalStrings.DuplicateForeignKeyUniquenessMismatch(
                             Property.Format(foreignKey.Properties),
                             foreignKey.DeclaringEntityType.DisplayName(),
                             Property.Format(duplicateForeignKey.Properties),
@@ -315,7 +321,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
 
                     if (foreignKey.DeleteBehavior != duplicateForeignKey.DeleteBehavior)
                     {
-                        ShowError(RelationalStrings.DuplicateForeignKeyDeleteBehaviorMismatch(
+                        ThrowValidationError(RelationalStrings.DuplicateForeignKeyDeleteBehaviorMismatch(
                             Property.Format(foreignKey.Properties),
                             foreignKey.DeclaringEntityType.DisplayName(),
                             Property.Format(duplicateForeignKey.Properties),
@@ -358,7 +364,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
                     var duplicateIndexColumns = duplicateIndex.Properties.Select(p => RelationalExtensions.For(p).ColumnName).ToList();
                     if (!indexColumns.SequenceEqual(duplicateIndexColumns, StringComparer.OrdinalIgnoreCase))
                     {
-                        ShowError(RelationalStrings.DuplicateIndexColumnMismatch(
+                        ThrowValidationError(RelationalStrings.DuplicateIndexColumnMismatch(
                             Property.Format(index.Properties),
                             index.DeclaringEntityType.DisplayName(),
                             Property.Format(duplicateIndex.Properties),
@@ -371,7 +377,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
 
                     if (index.IsUnique != duplicateIndex.IsUnique)
                     {
-                        ShowError(RelationalStrings.DuplicateIndexUniquenessMismatch(
+                        ThrowValidationError(RelationalStrings.DuplicateIndexUniquenessMismatch(
                             Property.Format(index.Properties),
                             index.DeclaringEntityType.DisplayName(),
                             Property.Format(duplicateIndex.Properties),
@@ -383,18 +389,11 @@ namespace Microsoft.EntityFrameworkCore.Internal
             }
         }
 
-        private static string Format(IEnumerable<string> columnNames)
-            => "{" + string.Join(", ", columnNames.Select(c => "'" + c + "'")) + "}";
-
-        private static string Format(string schema, string name)
-            => (string.IsNullOrEmpty(schema) ? "" : schema + ".") + name;
-
         /// <summary>
         ///     This API supports the Entity Framework Core infrastructure and is not intended to be used
         ///     directly from your code. This API may change or be removed in future releases.
         /// </summary>
-        protected virtual
-            void ValidateInheritanceMapping([NotNull] IModel model)
+        protected virtual void ValidateInheritanceMapping([NotNull] IModel model)
         {
             foreach (var rootEntityType in model.GetRootEntityTypes())
             {
@@ -407,11 +406,11 @@ namespace Microsoft.EntityFrameworkCore.Internal
             var annotations = RelationalExtensions.For(entityType);
             if (annotations.DiscriminatorProperty == null)
             {
-                ShowError(RelationalStrings.NoDiscriminatorProperty(entityType.DisplayName()));
+                ThrowValidationError(RelationalStrings.NoDiscriminatorProperty(entityType.DisplayName()));
             }
             if (annotations.DiscriminatorValue == null)
             {
-                ShowError(RelationalStrings.NoDiscriminatorValue(entityType.DisplayName()));
+                ThrowValidationError(RelationalStrings.NoDiscriminatorValue(entityType.DisplayName()));
             }
         }
 
@@ -437,11 +436,24 @@ namespace Microsoft.EntityFrameworkCore.Internal
                 IEntityType duplicateEntityType;
                 if (discriminatorValues.TryGetValue(discriminatorValue, out duplicateEntityType))
                 {
-                    ShowError(RelationalStrings.DuplicateDiscriminatorValue(
+                    ThrowValidationError(RelationalStrings.DuplicateDiscriminatorValue(
                         derivedType.DisplayName(), discriminatorValue, duplicateEntityType.DisplayName()));
                 }
                 discriminatorValues[discriminatorValue] = derivedType;
             }
         }
+
+        /// <summary>
+        ///     This API supports the Entity Framework Core infrastructure and is not intended to be used
+        ///     directly from your code. This API may change or be removed in future releases.
+        /// </summary>
+        protected virtual void ShowWarning(RelationalEventId eventId, [NotNull] string message)
+            => Logger.LogWarning(eventId, () => message);
+
+        private static string Format(IEnumerable<string> columnNames)
+            => "{" + string.Join(", ", columnNames.Select(c => "'" + c + "'")) + "}";
+
+        private static string Format(string schema, string name)
+            => (string.IsNullOrEmpty(schema) ? "" : schema + ".") + name;
     }
 }

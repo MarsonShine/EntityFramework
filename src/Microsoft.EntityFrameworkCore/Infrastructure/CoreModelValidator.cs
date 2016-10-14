@@ -1,4 +1,4 @@
-// Copyright (c) .NET Foundation. All rights reserved.
+﻿// Copyright (c) .NET Foundation. All rights reserved.
 // Licensed under the Apache License, Version 2.0. See License.txt in the project root for license information.
 
 using System;
@@ -7,23 +7,33 @@ using System.Linq;
 using System.Reflection;
 using JetBrains.Annotations;
 using Microsoft.EntityFrameworkCore.ChangeTracking.Internal;
+using Microsoft.EntityFrameworkCore.Internal;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Metadata.Internal;
 using Microsoft.EntityFrameworkCore.Utilities;
+using Microsoft.Extensions.Logging;
 
-namespace Microsoft.EntityFrameworkCore.Internal
+namespace Microsoft.EntityFrameworkCore.Infrastructure
 {
     /// <summary>
-    ///     This API supports the Entity Framework Core infrastructure and is not intended to be used
-    ///     directly from your code. This API may change or be removed in future releases.
+    ///     The validator that enforces core rules common for all providers.
     /// </summary>
-    public abstract class ModelValidator : IModelValidator
+    public class CoreModelValidator : ModelValidator
     {
         /// <summary>
-        ///     This API supports the Entity Framework Core infrastructure and is not intended to be used
-        ///     directly from your code. This API may change or be removed in future releases.
+        ///     Creates a new instance of <see cref="CoreModelValidator" />.
         /// </summary>
-        public virtual void Validate(IModel model)
+        /// <param name="logger"> The logger. </param>
+        public CoreModelValidator([NotNull] ILogger<ModelValidator> logger)
+            : base(logger)
+        {
+        }
+
+        /// <summary>
+        ///     Validates a model, throwing an exception if any errors are found.
+        /// </summary>
+        /// <param name="model"> The model to validate. </param>
+        public override void Validate(IModel model)
         {
             EnsureNoShadowEntities(model);
             EnsureNonNullPrimaryKeys(model);
@@ -42,7 +52,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
             var firstShadowEntity = model.GetEntityTypes().FirstOrDefault(entityType => !entityType.HasClrType());
             if (firstShadowEntity != null)
             {
-                ShowError(CoreStrings.ShadowEntity(firstShadowEntity.DisplayName()));
+                ThrowValidationError(CoreStrings.ShadowEntity(firstShadowEntity.DisplayName()));
             }
         }
 
@@ -64,7 +74,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
                             && conventionalKey != null
                             && ConfigurationSource.Convention.Overrides(conventionalKey.GetConfigurationSource()))
                         {
-                            ShowError(CoreStrings.ReferencedShadowKey(
+                            ThrowValidationError(CoreStrings.ReferencedShadowKey(
                                 referencingFk.DeclaringEntityType.DisplayName() +
                                 (referencingFk.DependentToPrincipal == null
                                     ? ""
@@ -78,7 +88,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
                             continue;
                         }
 
-                        ShowWarning(CoreStrings.ShadowKey(
+                        ShowWarning(CoreEventId.ModelValidationShadowKeyWarning, CoreStrings.ShadowKey(
                             Property.Format(key.Properties),
                             entityType.DisplayName(),
                             Property.Format(key.Properties)));
@@ -98,7 +108,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
             var entityTypeWithNullPk = model.GetEntityTypes().FirstOrDefault(et => et.FindPrimaryKey() == null);
             if (entityTypeWithNullPk != null)
             {
-                ShowError(CoreStrings.EntityRequiresKey(entityTypeWithNullPk.DisplayName()));
+                ThrowValidationError(CoreStrings.EntityRequiresKey(entityTypeWithNullPk.DisplayName()));
             }
         }
 
@@ -115,7 +125,11 @@ namespace Microsoft.EntityFrameworkCore.Internal
             }
         }
 
-        private void EnsureClrInheritance(IModel model, IEntityType entityType, HashSet<IEntityType> validEntityTypes)
+        /// <summary>
+        ///     This API supports the Entity Framework Core infrastructure and is not intended to be used
+        ///     directly from your code. This API may change or be removed in future releases.
+        /// </summary>
+        protected virtual void EnsureClrInheritance([NotNull] IModel model, [NotNull] IEntityType entityType, [NotNull] HashSet<IEntityType> validEntityTypes)
         {
             if (validEntityTypes.Contains(entityType))
             {
@@ -130,7 +144,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
                 {
                     if (!baseEntityType.IsAssignableFrom(entityType))
                     {
-                        ShowError(CoreStrings.InconsistentInheritance(entityType.DisplayName(), baseEntityType.DisplayName()));
+                        ThrowValidationError(CoreStrings.InconsistentInheritance(entityType.DisplayName(), baseEntityType.DisplayName()));
                     }
                     EnsureClrInheritance(model, baseEntityType, validEntityTypes);
                     break;
@@ -141,7 +155,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
             if (entityType.ClrType?.IsInstantiable() == false
                 && !entityType.GetDerivedTypes().Any())
             {
-                ShowError(CoreStrings.AbstractLeafEntityType(entityType.DisplayName()));
+                ThrowValidationError(CoreStrings.AbstractLeafEntityType(entityType.DisplayName()));
             }
 
             validEntityTypes.Add(entityType);
@@ -167,7 +181,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
                 var errorMessage = entityType.CheckChangeTrackingStrategy(changeTrackingStrategy);
                 if (errorMessage != null)
                 {
-                    ShowError(errorMessage);
+                    ThrowValidationError(errorMessage);
                 }
             }
 
@@ -198,7 +212,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
                         memberInfo: out _,
                         errorMessage: out errorMessage))
                     {
-                        ShowError(errorMessage);
+                        ThrowValidationError(errorMessage);
                     }
 
                     if (!propertyBase.TryGetMemberInfo(
@@ -207,7 +221,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
                         memberInfo: out _,
                         errorMessage: out errorMessage))
                     {
-                        ShowError(errorMessage);
+                        ThrowValidationError(errorMessage);
                     }
 
                     if (!propertyBase.TryGetMemberInfo(
@@ -216,7 +230,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
                         memberInfo: out _,
                         errorMessage: out errorMessage))
                     {
-                        ShowError(errorMessage);
+                        ThrowValidationError(errorMessage);
                     }
                 }
             }
@@ -226,15 +240,7 @@ namespace Microsoft.EntityFrameworkCore.Internal
         ///     This API supports the Entity Framework Core infrastructure and is not intended to be used
         ///     directly from your code. This API may change or be removed in future releases.
         /// </summary>
-        protected virtual void ShowError([NotNull] string message)
-        {
-            throw new InvalidOperationException(message);
-        }
-
-        /// <summary>
-        ///     This API supports the Entity Framework Core infrastructure and is not intended to be used
-        ///     directly from your code. This API may change or be removed in future releases.
-        /// </summary>
-        protected abstract void ShowWarning([NotNull] string message);
+        protected virtual void ShowWarning(CoreEventId eventId, [NotNull] string message)
+            => Logger.LogWarning(eventId, () => message);
     }
 }
